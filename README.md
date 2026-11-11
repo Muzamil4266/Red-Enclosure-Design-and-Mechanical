@@ -97,3 +97,7 @@ EXTRA EXTRA
 
 
 Engineered as an open, highly capable technical environment, the workspace liberates users from the boundaries of predefined components and static layouts. Its comprehensive array of integrated utilities enables limitless custom design, procedural assembly, and deep workflow integration tailored to any project requirement.
+
+
+Note=Note components db are splitted into 3 files because GitHub doesn't allow size of file more then 30mb, you easily combine all 3 files to one when you run your program take ai help if needed specifically gemini or claude only
+Each and every module is kept within 30kb size to to maintain proper expansion of program so there are too many modules this is deliberately doned by splitting large modules into small
