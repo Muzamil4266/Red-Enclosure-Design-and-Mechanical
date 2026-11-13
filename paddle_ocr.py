@@ -5,38 +5,28 @@ Embedded directly inside the main workspace screen (No separate OS window/taskba
 (part 5 of 5 - this file keeps the ORIGINAL name, so existing imports keep working.
  It holds PaddleOCRMixin and re-exports every name the old single file had.)
 
-  ocr_imaging.py      settings + crop / sharpen / filter helpers
-  ocr_support.py      SmoothProgress, PdfWriter, open_file, _bench_image
-  ocr_workers.py      scan_worker_process, _build_ocr, ocr_engine_process
-  ocr_scan_editor.py  ScanEditor
-  pdf_split_worker.py PDF -> page images (own process, used by the PDF text screen)
-  pdf_text_extractor.py  PdfTextExtractor: the "Extract text from Pdf" screen, format_duration
-  paddle_ocr.py       PaddleOCRMixin (this file)
+  ocr_imaging.py         settings + crop / sharpen / filter helpers
+  ocr_support.py         SmoothProgress, PdfWriter, open_file, _bench_image
+  ocr_workers.py         scan_worker_process, _build_ocr, ocr_engine_process
+  ocr_gallery.py         choose_images, PhotoGallery (numbered thumbnails: rotate / remove / add / zoom)
+  ocr_image_extractor.py ImageTextExtractor ("Extract text from images" work screen)
+  ocr_pdf_maker.py       PdfOptionsScreen, PdfBuildScreen ("Images to PDF")
+  pdf_text_extractor.py  PdfTextExtractor ("Extract text from PDF")
+  ocr_scan_editor.py     ScanEditor (old editor, no longer used by the panel, kept so old imports work)
+  paddle_ocr.py          PaddleOCRMixin (this file)
 
-WORKFLOW
-  1. User clicks "Select Photos & Scan"  -> normal PC file dialog opens, user selects photos (up to 500).
-  2. All selected photos are loaded into the page editor (left list: drag the divider to widen it,
-     "+" adds more photos, "x" removes a page).
-  3. Scan editor: Original / Auto / B&W / Vibrant / Soft Tone / Sharp Black / OCV B&W filters,
-     manual crop handles, Rotate, and "Apply filter to all pages".
-  4. User presses "Extract Text" -> every page is exported as a scanned image,
-     and ONLY THEN is the text extracted from the scanned images.
-     When it is done the screen shows "Time taken" and "Number of words in txt".
-  The PaddleOCR model is loaded in the background the moment the OCR panel opens, so there is
-  no waiting for it after scanning.
-
-  5. "Extract text from Pdf" -> file picker (one or many PDFs) -> every PDF is broken into page images,
-     every page is auto-scanned (Auto mode, Medium sharpness) and read by the same OCR engine.
-     That screen lives in pdf_text_extractor.py so this one stays simple.
+SCREENS
+  Home           [Extract text from PDF] [Extract text from images] [Images to PDF]
+  Extract text from images -> one sub button "Pick photos/folder" -> gallery (up to 2000 photos) -> Next ->
+                  Auto filter + Medium sharpness are applied automatically and the text is extracted
+  Images to PDF  -> "Pick photos/folder" -> gallery (up to 1000 images) -> Next -> 2 option steps with an example
+                  -> PDF saved next to the pictures
+The PaddleOCR model is loaded in the background the moment the OCR panel opens.
 """
 import os
 import queue as pyqueue
-import shutil
-import tempfile
-import time
-import tkinter as tk
-import tkinter.font as tkfont
-from tkinter import filedialog, scrolledtext, messagebox, ttk
+import tkinter as tk  # noqa: F401
+from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import multiprocessing as mp
 
@@ -50,7 +40,11 @@ from ocr_imaging import (  # noqa: F401
 from ocr_support import SmoothProgress, PdfWriter, open_file, _bench_image  # noqa: F401
 from ocr_workers import scan_worker_process, _build_ocr, ocr_engine_process  # noqa: F401
 from ocr_scan_editor import ScanEditor  # noqa: F401
-from pdf_text_extractor import PdfTextExtractor, format_duration, reflow_text, PDF_TYPES  # noqa: F401
+
+from ocr_gallery import PhotoGallery, choose_images, MAX_EXTRACT_PHOTOS, MAX_PDF_IMAGES
+from ocr_image_extractor import ImageTextExtractor
+from ocr_pdf_maker import PdfOptionsScreen, PdfBuildScreen, default_pdf_path
+from pdf_text_extractor import PdfTextExtractor, PDF_TYPES
 
 
 # ----------------------------------------------------------------------------------------------
@@ -63,13 +57,8 @@ class PaddleOCRMixin:
         self._ocr_engine = None
         self._ocr_tmp = None
         self._ocr_rid = 0
-        self._pdf_extract_active = False
-
-    def _ocr_next_rid(self):
-        """One shared, ever-growing run number for every OCR run (photos or PDFs). The engine stops a run when
-        'cancel value >= run number', so a stopped run can never cancel a later one."""
-        self._ocr_rid = getattr(self, "_ocr_rid", 0) + 1
-        return self._ocr_rid
+        self._pdf_extract_active = False   # True while a work screen reads the engine's messages itself
+        self._ocr_close_fn = None
 
     # ---- persistent OCR engine (model is loaded once, in the background) ----
     def _ocr_start_engine(self):
@@ -96,22 +85,30 @@ class PaddleOCRMixin:
             pass
         self._ocr_engine = None
 
+    def _ocr_next_rid(self):
+        """Run ids only ever grow: stopping run N (cancel = N) can never stop a later run."""
+        self._ocr_rid = getattr(self, "_ocr_rid", 0) + 1
+        return self._ocr_rid
+
+    def shutdown_paddle_ocr(self):
+        fn = getattr(self, "_ocr_close_fn", None)
+        if fn is not None:
+            try:
+                fn()
+            except Exception:
+                pass
+        self._ocr_stop_engine()
+
+    # ---- the panel ----
     def open_paddle_ocr(self):
         """Displays the AI Offline OCR panel directly inside the main screen workspace."""
-        if hasattr(self, "_ocr_panel") and self._ocr_panel is not None and self._ocr_panel.winfo_exists():
+        if getattr(self, "_ocr_panel", None) is not None and self._ocr_panel.winfo_exists():
             self._ocr_panel.lift()
             return
 
-        eng0 = self._ocr_start_engine()
-
-        # Embedded frame attached directly to main canvas container (single main screen)
-        panel = ctk.CTkFrame(
-            self.canvas_container,
-            fg_color="#181818",
-            corner_radius=12,
-            border_width=2,
-            border_color="#3498db"
-        )
+        self._ocr_start_engine()
+        panel = ctk.CTkFrame(self.canvas_container, fg_color="#181818", corner_radius=12,
+                             border_width=2, border_color="#3498db")
         full = {"on": START_FULL}
 
         def place_panel():
@@ -123,543 +120,236 @@ class PaddleOCRMixin:
 
         place_panel()
         self._ocr_panel = panel
-        self._ocr_tmp = None
-        editor_ref = {"ed": None}
-        pdf_ref = {"scr": None}      # the "Extract text from Pdf" screen while it is open
-        # phase: idle | scanning | pdf | ocr
-        run = {"phase": "idle", "total": 0, "done": 0, "sq": None, "proc": None, "id": 0, "prog": None,
-               "pdf_path": None, "t0": 0.0, "words": 0, "pages": []}
+        # gallery = kept while the user moves between gallery / extractor / options; work = the current work screen
+        S = {"cur": None, "back": None, "gallery": None, "work": None, "mode": None, "folder": None, "status": ""}
 
-        def stop_scan():
-            p = run["proc"]
-            if p is not None:
-                try:
-                    if p.is_alive():
-                        p.terminate()
-                except Exception:
-                    pass
-            run["proc"] = None
-            run["sq"] = None
-
-        def cleanup_tmp():
-            if getattr(self, "_ocr_tmp", None):
-                shutil.rmtree(self._ocr_tmp, ignore_errors=True)
-            self._ocr_tmp = None
-
-        # Header bar: [← back]  title ........ [⛶] [✖]
+        # ---------------- header: [← Back] title ........ [⛶] [✖] ----------------
         header = ctk.CTkFrame(panel, fg_color="transparent")
         header.pack(fill="x", padx=15, pady=(12, 6))
-
-        title_lbl = ctk.CTkLabel(
-            header,
-            text="🤖 AI Offline OCR — PaddleOCR",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color="#3498db"
-        )
+        title_lbl = ctk.CTkLabel(header, text="🤖 AI Offline OCR — PaddleOCR",
+                                 font=ctk.CTkFont(size=14, weight="bold"), text_color="#3498db")
         title_lbl.pack(side="left")
-
-        back_btn = ctk.CTkButton(
-            header, text="← Back to pages", width=120, height=28, corner_radius=14,
-            fg_color="#34495e", hover_color="#2c3e50", font=ctk.CTkFont(size=12, weight="bold"),
-            command=lambda: go_back()
-        )  # shown only on the results screen while the page editor still exists
+        back_btn = ctk.CTkButton(header, text="← Back", width=90, height=28, corner_radius=14, fg_color="#34495e",
+                                 hover_color="#2c3e50", font=ctk.CTkFont(size=12, weight="bold"),
+                                 command=lambda: do_back())
 
         def close_panel():
-            if pdf_ref["scr"] is not None:
-                pdf_ref["scr"].shutdown()
-            if editor_ref["ed"] is not None:
-                editor_ref["ed"].shutdown()
-            stop_scan()
+            discard_gallery()
+            drop_work()
             self._ocr_stop_engine()
-            cleanup_tmp()
-            panel.destroy()
+            self._ocr_close_fn = None
+            try:
+                panel.destroy()
+            except Exception:
+                pass
             self._ocr_panel = None
-            self._pdf_extract_active = False
 
-        ctk.CTkButton(
-            header,
-            text="✖",
-            width=28,
-            height=28,
-            corner_radius=14,
-            fg_color="#c0392b",
-            hover_color="#e74c3c",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            command=close_panel
-        ).pack(side="right")
+        self._ocr_close_fn = close_panel
+        ctk.CTkButton(header, text="✖", width=28, height=28, corner_radius=14, fg_color="#c0392b",
+                      hover_color="#e74c3c", font=ctk.CTkFont(size=12, weight="bold"),
+                      command=close_panel).pack(side="right")
 
         def toggle_full():
             full["on"] = not full["on"]
             full_btn.configure(text="❐" if full["on"] else "⛶")
             place_panel()
 
-        full_btn = ctk.CTkButton(
-            header,
-            text="❐" if START_FULL else "⛶",
-            width=28,
-            height=28,
-            corner_radius=14,
-            fg_color="#1f6aa5",
-            hover_color="#144870",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            command=toggle_full
-        )
+        full_btn = ctk.CTkButton(header, text="❐" if START_FULL else "⛶", width=28, height=28, corner_radius=14,
+                                 fg_color="#1f6aa5", hover_color="#144870", font=ctk.CTkFont(size=14, weight="bold"),
+                                 command=toggle_full)
         full_btn.pack(side="right", padx=(0, 6))
 
-        # Content area: either the results view, the scan editor or the PDF text screen
         content = ctk.CTkFrame(panel, fg_color="transparent")
         content.pack(fill="both", expand=True)
-        results = ctk.CTkFrame(content, fg_color="transparent")
-        results.pack(fill="both", expand=True)
 
-        # Top Action Bar
-        top_bar = ctk.CTkFrame(results, fg_color="transparent")
-        top_bar.pack(fill="x", padx=15, pady=6)
+        # ---------------- screen helpers ----------------
+        def later(fn):
+            panel.after(10, fn)       # never destroy a screen from inside its own button callback
 
-        select_btn = ctk.CTkButton(
-            top_bar,
-            text="📁 Select Photos & Scan",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#1f6aa5",
-            hover_color="#144870",
-            height=32,
-            command=lambda: pick_and_scan()
-        )
-        select_btn.pack(side="left")
+        def hide_all():
+            for f in (home, images_menu, S["gallery"], S["work"]):
+                if f is not None:
+                    try:
+                        f.pack_forget()
+                    except Exception:
+                        pass
 
-        pdf_text_btn = ctk.CTkButton(
-            top_bar,
-            text="📄 Extract text from Pdf",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#16a085",
-            hover_color="#117a65",
-            height=32,
-            command=lambda: pick_pdfs()
-        )
-        pdf_text_btn.pack(side="left", padx=(8, 0))
-
-        open_pdf_btn = ctk.CTkButton(
-            top_bar, text="📂 Open PDF", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#d35400",
-            hover_color="#a04000", height=32, command=lambda: open_file(run["pdf_path"])
-        )  # appears after a PDF has been saved
-
-        # Progress bar (0..100 %) + percentage label
-        prog_row = ctk.CTkFrame(results, fg_color="transparent")
-        prog_row.pack(fill="x", padx=15, pady=(4, 4))
-        pct_label = ctk.CTkLabel(prog_row, text="", width=48, anchor="e",
-                                 font=ctk.CTkFont(size=13, weight="bold"), text_color="#ecf0f1")
-        pct_label.pack(side="right", padx=(8, 0))
-        progress = ttk.Progressbar(prog_row, mode="determinate", maximum=100)
-        progress.pack(side="left", fill="x", expand=True)
-
-        def set_bar(v):
-            progress["value"] = v
-            pct_label.configure(text=f"{int(v)}%")
-
-        # Status Label
-        status_label = ctk.CTkLabel(
-            results,
-            text=("✅ OCR engine ready. Select photos to begin." if eng0["ready"]
-                  else "Starting the OCR engine in the background — you can select photos right away."),
-            font=ctk.CTkFont(size=11),
-            text_color="#2ecc71" if eng0["ready"] else "#f1c40f",
-            anchor="w"
-        )
-        status_label.pack(fill="x", padx=15, pady=(0, 6))
-
-        # Bottom Action Bar (packed before the text box so it is never squeezed out)
-        bottom_bar = ctk.CTkFrame(results, fg_color="transparent")
-        bottom_bar.pack(side="bottom", pady=(4, 12))
-
-        # Text Output Area (Ctrl + wheel / touchpad pinch changes the text size)
-        text_font = tkfont.Font(family="Consolas", size=10)
-        text_box = scrolledtext.ScrolledText(
-            results,
-            wrap=tk.WORD,
-            bg="#111111",
-            fg="#ffffff",
-            insertbackground="#ffffff",
-            font=text_font,
-            borderwidth=1,
-            relief="solid"
-        )
-        text_box.pack(fill=tk.BOTH, expand=True, padx=15, pady=6)
-
-        # "Time taken" and "Number of words" line, shown after the text has been extracted
-        stats_label = ctk.CTkLabel(results, text="", anchor="w", font=ctk.CTkFont(size=15, weight="bold"),
-                                   text_color="#f1c40f")
-
-        def set_stats(text):
-            if text:
-                stats_label.configure(text=text)
-                stats_label.pack(fill="x", padx=15, pady=(0, 4), before=text_box)
-            else:
-                stats_label.pack_forget()
-
-        # "Join lines": the OCR engine returns one line per printed line; joined, the text uses the full width
-        join_var = tk.BooleanVar(value=True)
-
-        def page_block(name, text):
-            body = reflow_text(text) if join_var.get() else text
-            return f"--- {name} ---\n{body}\n\n"
-
-        def rerender():
-            text_box.delete("1.0", tk.END)
-            for name, page_text in run["pages"]:
-                text_box.insert(tk.END, page_block(name, page_text))
-
-        def zoom_text(event):
-            step = 1 if event.delta > 0 else -1
-            text_font.configure(size=max(6, min(40, text_font.cget("size") + step)))
-            return "break"
-
-        text_box.bind("<Control-MouseWheel>", zoom_text)
-
-        def copy_text():
-            content_txt = text_box.get("1.0", tk.END).strip()
-            if not content_txt:
-                messagebox.showwarning("Nothing to Copy", "No text extracted yet.")
-                return
-            self.clipboard_clear()
-            self.clipboard_append(content_txt)
-            if hasattr(self, "toast"):
-                self.toast("📋 Copied to clipboard!")
-            else:
-                messagebox.showinfo("Copied", "All extracted text copied to clipboard!")
-
-        def save_text():
-            content_txt = text_box.get("1.0", tk.END).strip()
-            if not content_txt:
-                messagebox.showwarning("Nothing to Save", "No extracted text available to save.")
-                return
-            path = filedialog.asksaveasfilename(
-                defaultextension=".txt",
-                filetypes=[("Text File", "*.txt")],
-                title="Save Extracted Text As"
-            )
-            if not path:
-                return
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content_txt)
-            if hasattr(self, "toast"):
-                self.toast("💾 Text saved to file!")
-            else:
-                messagebox.showinfo("Saved", f"Text saved to:\n{path}")
-
-        def send_to_canvas():
-            content_txt = text_box.get("1.0", tk.END).strip()
-            if not content_txt:
-                messagebox.showwarning("Nothing to Insert", "No extracted text available to place on workspace canvas.")
-                return
-            self.begin_change()
-            cx = self.canvas.canvasx(self.canvas.winfo_width() / 2)
-            cy = self.canvas.canvasy(self.canvas.winfo_height() / 2)
-            self.canvas.create_text(
-                cx, cy, text=content_txt, anchor="nw", fill=getattr(self, "pen_color", "#e74c3c"),
-                tags="text_note", font=("Arial", max(8, int(12 * getattr(self, "current_zoom_scale", 1.0))), "bold")
-            )
-            self.commit_change()
-            if hasattr(self, "update_workspace_counter"):
-                self.update_workspace_counter()
-            if hasattr(self, "toast"):
-                self.toast("✏️ Text inserted onto canvas workspace!")
-
-        ctk.CTkCheckBox(
-            bottom_bar, text="↔ Join lines (use full width)", variable=join_var, command=rerender,
-            font=ctk.CTkFont(size=12)
-        ).pack(side="left", padx=(0, 14))
-
-        ctk.CTkButton(
-            bottom_bar, text="📋 Copy Text", width=120, fg_color="#27ae60", hover_color="#1e8449", command=copy_text
-        ).pack(side="left", padx=5)
-
-        ctk.CTkButton(
-            bottom_bar, text="💾 Save as .txt", width=120, fg_color="#8e44ad", hover_color="#6c3483", command=save_text
-        ).pack(side="left", padx=5)
-
-        ctk.CTkButton(
-            bottom_bar, text="📌 Put on Canvas Workspace", width=170, fg_color="#d35400", hover_color="#a04000", command=send_to_canvas
-        ).pack(side="left", padx=5)
-
-        # ---------------- screens: results <-> page editor <-> PDF text screen ----------------
-        def show_results():
-            ed = editor_ref["ed"]
-            if ed is not None:
-                ed.pack_forget()                 # hidden, NOT destroyed: all crop / filter edits are kept
-            results.pack(fill="both", expand=True)
-            if ed is not None:
+        def show(name, frame, back):
+            hide_all()
+            S["cur"], S["back"] = name, back
+            frame.pack(fill="both", expand=True)
+            if back:
                 back_btn.pack(side="left", padx=(0, 10), before=title_lbl)
             else:
                 back_btn.pack_forget()
 
-        def show_editor():
-            back_btn.pack_forget()
-            results.pack_forget()
-            editor_ref["ed"].pack(fill="both", expand=True)
+        def do_back():
+            if S["back"]:
+                S["back"]()
 
-        def discard_editor():
-            ed = editor_ref["ed"]
-            if ed is not None:
-                ed.shutdown()
-                ed.destroy()
-                editor_ref["ed"] = None
-            show_results()
-
-        def go_back():
-            if run["phase"] != "idle":
-                if not messagebox.askyesno("Go back?", "This is still running.\nStop it and go back to the pages?"):
-                    return
-                cancel_run()
-            if editor_ref["ed"] is not None:
-                show_editor()
-
-        def close_pdf_screen():
-            scr = pdf_ref["scr"]
-            pdf_ref["scr"] = None
-            if scr is not None:
-                scr.shutdown()
-                scr.destroy()
-            show_results()
-
-        def pick_pdfs():
-            """'Extract text from Pdf': file picker (one or many PDFs), then the PDF text screen takes over."""
-            if run["phase"] != "idle":
-                return
-            paths = filedialog.askopenfilenames(
-                title="Select PDF(s) to extract text from",
-                filetypes=PDF_TYPES
-            )
-            if not paths:
-                return
-            self._ocr_start_engine()  # no-op while it is alive; restarts it if it ever stopped
-            old = pdf_ref["scr"]
-            if old is not None:
-                old.shutdown()
-                old.destroy()
-            scr = PdfTextExtractor(content, self, list(paths), on_back=close_pdf_screen)
-            pdf_ref["scr"] = scr
-            back_btn.pack_forget()
-            results.pack_forget()
-            if editor_ref["ed"] is not None:
-                editor_ref["ed"].pack_forget()
-            scr.pack(fill="both", expand=True)
-
-        # ---------------- STEP 1: choose photos, STEP 2: load + edit them ----------------
-        def pick_and_scan():
-            paths = filedialog.askopenfilenames(
-                title=f"Select up to {MAX_PHOTOS} photos",
-                filetypes=IMAGE_TYPES
-            )
-            if not paths:
-                return
-            if len(paths) > MAX_PHOTOS:
-                messagebox.showinfo("Too many photos", f"Only the first {MAX_PHOTOS} photos will be used.")
-            paths = list(paths[:MAX_PHOTOS])
-            self._ocr_start_engine()  # no-op while it is alive; restarts it if it ever stopped
-            if editor_ref["ed"] is not None:
-                editor_ref["ed"].shutdown()
-                editor_ref["ed"].destroy()
-            ed = ScanEditor(content, paths, on_done=start_extraction, on_cancel=discard_editor, on_pdf=start_pdf)
-            editor_ref["ed"] = ed
-            show_editor()
-
-        # ---------------- runs ----------------
-        def finish_run(cleanup=True):
-            run["phase"] = "idle"
-            select_btn.configure(state="normal")
-            pdf_text_btn.configure(state="normal")
-            stop_scan()
-            if cleanup:
-                cleanup_tmp()
-
-        def cancel_run():
-            eng = self._ocr_engine
-            if run["phase"] == "ocr" and eng is not None:
-                eng["cancel"].value = run["id"]          # engine stops after the page it is reading now
-            stop_scan()
-            if run["phase"] == "pdf" and run["pdf_path"]:
+        def drop_work():
+            w, S["work"] = S["work"], None
+            if w is not None:
                 try:
-                    os.remove(run["pdf_path"])
+                    w.shutdown()
                 except Exception:
                     pass
-            run["id"] = self._ocr_next_rid()              # results of the stopped run are ignored from now on
-            run["prog"] = None
-            set_bar(0)
-            pct_label.configure(text="")
-            set_stats("")
-            status_label.configure(text="Stopped. Change the pages if you like and start again.", text_color="#f1c40f")
-            finish_run(cleanup=False)
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
 
-        def begin_run(total, phase, with_ocr):
-            eng = self._ocr_start_engine()
-            run["id"] = self._ocr_next_rid()
-            run.update(phase=phase, total=total, done=0, words=0, pages=[], t0=time.perf_counter())
-            run["prog"] = SmoothProgress(total, with_ocr=with_ocr, ocr_prior=eng.get("bench"))
-            select_btn.configure(state="disabled")
-            pdf_text_btn.configure(state="disabled")
-            open_pdf_btn.pack_forget()
-            set_bar(0)
-            set_stats("")
-            stop_scan()
-            cleanup_tmp()
+        def discard_gallery():
+            g, S["gallery"] = S["gallery"], None
+            if g is not None:
+                try:
+                    g.shutdown()
+                except Exception:
+                    pass
+                try:
+                    g.destroy()
+                except Exception:
+                    pass
 
-        def start_extraction(jobs):
-            show_results()
-            text_box.delete("1.0", tk.END)
-            total = len(jobs)
-            begin_run(total, "scanning", True)
-            status_label.configure(text=f"Saving scanned pages 0/{total}...", text_color="#f1c40f")
-            self._ocr_tmp = tempfile.mkdtemp(prefix="ocr_scan_")
-            sq = mp.Queue()
-            proc = mp.Process(target=scan_worker_process, args=(jobs, self._ocr_tmp, sq), daemon=True)
-            proc.start()
-            run["sq"], run["proc"] = sq, proc
+        # ---------------- HOME ----------------
+        home = ctk.CTkFrame(content, fg_color="transparent")
+        ctk.CTkLabel(home, text="What do you want to do?", font=ctk.CTkFont(size=18, weight="bold"),
+                     text_color="#ecf0f1").pack(pady=(34, 14))
 
-        def start_pdf(jobs):
-            path = filedialog.asksaveasfilename(
-                defaultextension=".pdf",
-                filetypes=[("PDF document", "*.pdf")],
-                initialfile="scanned_pages.pdf",
-                title="Save scanned pages as PDF"
-            )
-            if not path:
-                return                                     # stay on the page editor
-            show_results()
-            total = len(jobs)
-            begin_run(total, "pdf", False)
-            run["pdf_path"] = path
-            status_label.configure(text=f"Creating PDF 0/{total}...", text_color="#f1c40f")
-            sq = mp.Queue()
-            proc = mp.Process(target=scan_worker_process, args=(jobs, "", sq, path), daemon=True)
-            proc.start()
-            run["sq"], run["proc"] = sq, proc
+        def big(text, sub, cmd, color):
+            ctk.CTkButton(home, text=text, width=400, height=54, fg_color=color, hover_color="#144870",
+                          font=ctk.CTkFont(size=15, weight="bold"), command=cmd).pack(pady=(10, 0))
+            ctk.CTkLabel(home, text=sub, font=ctk.CTkFont(size=11), text_color="#8a8a8a").pack(pady=(3, 4))
+
+        def go_home():
+            drop_work()
+            discard_gallery()
+            show("home", home, None)
+
+        # --- 1. Extract text from PDF (already existed) ---
+        def go_pdf_text():
+            paths = filedialog.askopenfilenames(title="Select PDF(s) to extract text from", filetypes=PDF_TYPES)
+            if not paths:
+                return
+            drop_work()
+            ex = PdfTextExtractor(content, self, list(paths), on_back=lambda: later(go_home))
+            S["work"] = ex
+            show("pdf_text", ex, None)           # it has its own "Back to OCR" button
+
+        # --- 2. Extract text from images ---
+        def go_images_menu():
+            show("images_menu", images_menu, go_home)
+
+        # --- 3. Images to PDF ---
+        def go_images_to_pdf():
+            pick("pdf")
+
+        big("📄 Extract text from PDF", "Read the text of one or many PDF files", go_pdf_text, "#1f6aa5")
+        big("🖼 Extract text from images", "Photos or a whole folder, up to 2000 photos", go_images_menu, "#1f6aa5")
+        big("📑 Images to PDF", "Photos or a whole folder, up to 1000 images. The PDF is saved next to the pictures",
+            go_images_to_pdf, "#d35400")
+        status_lbl = ctk.CTkLabel(home, text="", font=ctk.CTkFont(size=11), text_color="#f1c40f")
+        status_lbl.pack(pady=(24, 0))
+
+        # ---------------- IMAGES MENU (only one sub button) ----------------
+        images_menu = ctk.CTkFrame(content, fg_color="transparent")
+        ctk.CTkLabel(images_menu, text="🖼 Extract text from images", font=ctk.CTkFont(size=18, weight="bold"),
+                     text_color="#ecf0f1").pack(pady=(40, 18))
+        ctk.CTkButton(images_menu, text="📁 Pick photos/folder", width=340, height=56, fg_color="#1f6aa5",
+                      hover_color="#144870", font=ctk.CTkFont(size=15, weight="bold"),
+                      command=lambda: pick("extract")).pack()
+        ctk.CTkLabel(images_menu, text="Pick several photos or a whole folder (up to 2000).",
+                     font=ctk.CTkFont(size=11), text_color="#8a8a8a").pack(pady=(8, 0))
+
+        # ---------------- pick -> gallery ----------------
+        def pick(mode):
+            limit = MAX_EXTRACT_PHOTOS if mode == "extract" else MAX_PDF_IMAGES
+            res = choose_images(panel, limit)
+            if not res:
+                return
+            paths, folder = res
+            drop_work()
+            discard_gallery()
+            g = PhotoGallery(content, paths, limit, on_next=gallery_next)
+            S.update(gallery=g, mode=mode, folder=folder)
+            show("gallery", g, gallery_back)
+
+        def gallery_back():
+            g = S["gallery"]
+            if g is not None and g.count() > 0:
+                if not messagebox.askyesno("Go back?", "Remove the picked pictures and go back?", parent=panel):
+                    return
+            mode = S["mode"]
+            discard_gallery()
+            if mode == "extract":
+                go_images_menu()
+            else:
+                show("home", home, None)
+
+        def back_to_gallery():
+            drop_work()
+            if S["gallery"] is not None:
+                show("gallery", S["gallery"], gallery_back)
+            else:
+                go_home()
+
+        def gallery_next():
+            g = S["gallery"]
+            if g is None or g.count() == 0:
+                return
+            items = g.get_items()
+            drop_work()
+            if S["mode"] == "extract":
+                ex = ImageTextExtractor(content, self, items, on_back=lambda: later(back_to_gallery))
+                S["work"] = ex
+                show("extract", ex, None)        # it has its own "Back to photos" button
+            else:
+                opt = PdfOptionsScreen(content, items, on_ok=lambda auto, sharp: later(lambda: build_pdf(items, auto, sharp)),
+                                       on_back=lambda: later(back_to_gallery))
+                S["work"] = opt
+                show("pdf_options", opt, None)
+
+        def build_pdf(items, auto, sharp):
+            out = default_pdf_path(S["folder"], items[0]["path"])
+            drop_work()
+            b = PdfBuildScreen(content, self, items, out, auto, sharp,
+                               on_back=lambda: later(back_to_gallery), on_home=lambda: later(go_home))
+            S["work"] = b
+            show("pdf_build", b, None)
+
+        # ---------------- idle engine messages (ready / error) while no work screen owns the engine ----------------
+        def refresh_status():
+            eng = self._ocr_engine
+            if eng is None:
+                text, color = "OCR engine is not running. It starts when you pick something.", "#f1c40f"
+            elif eng.get("error"):
+                text, color = f"Error initializing PaddleOCR: {eng['error']}", "#e74c3c"
+            elif eng["ready"]:
+                text, color = "✅ OCR engine ready.", "#2ecc71"
+            else:
+                text, color = "Starting the OCR engine in the background — you can already pick PDFs or pictures.", "#f1c40f"
+            if text != S["status"]:
+                S["status"] = text
+                status_lbl.configure(text=text, text_color=color)
 
         def poll():
             if self._ocr_panel is None or not self._ocr_panel.winfo_exists():
                 return
             eng = self._ocr_engine
-            prog = run["prog"]
-
-            # --- messages from the scan / PDF process ---
-            sq = run["sq"]
-            if sq is not None:
-                try:
-                    while True:
-                        kind, payload = sq.get_nowait()
-                        if kind == "scan_progress":
-                            if prog:
-                                prog.scan_progress(payload)
-                            what = "Creating PDF" if run["phase"] == "pdf" else "Saving scanned pages"
-                            status_label.configure(text=f"{what} {payload}/{run['total']}...", text_color="#f1c40f")
-                        elif kind == "scan_done":
-                            stop_scan()
-                            eng = self._ocr_start_engine()
-                            run["phase"] = "ocr"
-                            if prog:
-                                prog.set_prior(eng.get("bench"))
-                                prog.scan_finished(eng["ready"])
-                            eng["task_q"].put(("ocr", run["id"], payload))
-                            if eng["ready"]:
-                                status_label.configure(text=f"Extracting text 0/{run['total']}...", text_color="#3498db")
-                            else:
-                                status_label.configure(
-                                    text="All pages scanned. Waiting for the OCR engine to finish starting...",
-                                    text_color="#f1c40f")
-                            break
-                        elif kind == "pdf_done":
-                            pdf_file, ok, bad = payload
-                            if prog:
-                                prog.scan_finished(False)
-                            run["pdf_path"] = pdf_file
-                            msg = f"✅ PDF saved with {ok} page(s): {pdf_file}"
-                            if bad:
-                                msg += f"   ⚠ {bad} page(s) could not be read and were skipped."
-                            status_label.configure(text=msg, text_color="#2ecc71")
-                            open_pdf_btn.pack(side="left", padx=(8, 0))
-                            if hasattr(self, "toast"):
-                                self.toast("📄 PDF saved!")
-                            finish_run()
-                            break
-                        elif kind == "scan_error":
-                            status_label.configure(text=f"Error while scanning pages: {payload}", text_color="#e74c3c")
-                            run["prog"] = prog = None
-                            set_bar(0)
-                            pct_label.configure(text="")
-                            finish_run()
-                            break
-                except pyqueue.Empty:
-                    pass
-
-            # --- messages from the (already loaded) OCR engine ---
-            # (while the "Extract text from Pdf" screen is open it reads these messages itself)
-            if eng is not None and not getattr(self, "_pdf_extract_active", False):
+            if eng is not None and not self._pdf_extract_active:
                 try:
                     while True:
                         kind, payload = eng["out_q"].get_nowait()
                         if kind == "engine_ready":
                             eng["ready"], eng["bench"] = True, payload
-                            if prog:
-                                prog.set_prior(payload)
-                                prog.engine_became_ready()
-                            if run["phase"] == "idle":
-                                status_label.configure(text="✅ OCR engine ready. Select photos to begin.",
-                                                       text_color="#2ecc71")
-                            elif run["phase"] == "ocr":
-                                status_label.configure(text=f"Extracting text {run['done']}/{run['total']}...",
-                                                       text_color="#3498db")
                         elif kind == "engine_error":
                             eng["error"] = payload
-                            status_label.configure(text=f"Error initializing PaddleOCR: {payload}", text_color="#e74c3c")
-                            if run["phase"] in ("ocr", "scanning"):
-                                run["prog"] = prog = None
-                                set_bar(0)
-                                pct_label.configure(text="")
-                                finish_run()
-                        elif kind == "result":
-                            rid, path, text = payload
-                            if rid != run["id"] or run["phase"] != "ocr":
-                                continue                                 # result of a stopped run
-                            run["pages"].append((os.path.basename(path), text))
-                            text_box.insert(tk.END, page_block(os.path.basename(path), text))
-                            text_box.see(tk.END)
-                            run["done"] += 1
-                            if text and not text.startswith("[Error"):
-                                run["words"] += len(text.split())
-                            if prog:
-                                prog.ocr_result()
-                            status_label.configure(text=f"Extracting text {run['done']}/{run['total']}...",
-                                                   text_color="#3498db")
-                        elif kind == "done":
-                            if payload == run["id"] and run["phase"] == "ocr":
-                                if prog:
-                                    prog.finish()
-                                elapsed = time.perf_counter() - run["t0"]
-                                status_label.configure(
-                                    text=f"✅ Done — extracted text from {run['total']} scanned page(s).",
-                                    text_color="#2ecc71")
-                                set_stats(f"⏱ Time taken = {format_duration(elapsed)}      "
-                                          f"📝 Number of words in txt = {run['words']}")
-                                finish_run()
+                        # results / done of a stopped run are simply dropped
                 except pyqueue.Empty:
                     pass
-                if run["phase"] == "ocr" and not eng["error"] and not eng["proc"].is_alive():
-                    status_label.configure(text="The OCR engine stopped unexpectedly. Please try again.",
-                                           text_color="#e74c3c")
-                    self._ocr_engine = None
-                    run["prog"] = prog = None
-                    set_bar(0)
-                    pct_label.configure(text="")
-                    finish_run()
+            refresh_status()
+            self.after(150, poll)
 
-            # --- smooth 0 -> 100 % bar ---
-            if prog is not None:
-                v = prog.tick()
-                set_bar(v)
-                if prog.phase == "done" and v >= 100.0:
-                    run["prog"] = None
-
-            self.after(60, poll)
-
-        # Start loading PaddleOCR right now, in the background (hides the loading time)
-        self._ocr_start_engine()
+        show("home", home, None)
+        self._ocr_start_engine()     # start loading PaddleOCR right now, in the background
         poll()
