@@ -1,0 +1,21 @@
+components.db 
+components.db.part1 
+components.db.part2 
+components.db.part3 
+component-store-part2.zip 
+"components_store-part 1.zip" 
+platform-tools.zip 
+scrcpy_tools.zip 
+components_store/ 
+models/ 
+platform-tools/ 
+scrcpy_tools/ 
+saved_projects/ 
+converted/ 
+downloaded_audios/ 
+recordings/ 
+transcribed_texts/ 
+__pycache__/ 
+emotion_model.onnx 
+editor.log 
+live_help_seen.flag
