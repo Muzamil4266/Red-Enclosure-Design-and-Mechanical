@@ -1,103 +1,88 @@
-WHAT IS THIS PROGRAM?
-Red Enclosure is a standalone, offline desktop application designed to integrate real-world hardware prototyping, mechanical system modeling, media processing, computer vision, and local artificial intelligence automation into a single workspace. Developed out of a practical need for physical accuracy in technical schematics, the software replaces non-functional visual approximations with user-built circuit designs, micro-PCB stitching, smartphone diagnostics, and low-overhead local software utilities.
+# Red Enclosure — Offline Hardware, CAD, Vision & Local AI Desktop Suite
 
+An offline-first Python desktop suite built for **2D/3D hardware enclosure & layout design**, **PCB & 2D room image stitching**, **pipe simulation**, **Android ADB & `scrcpy` diagnostics**, **local speech-to-text (`faster-whisper`)**, **offline OCR & PDF tools (`PaddleOCR`, `PyMuPDF`)**, and **automated video editing**.
 
+Designed to run locally without cloud lock-in, heavy bloated IDEs, or subscription paywalls—giving makers, engineers, and developers a single modular workbench on Windows.
 
- 1. PROGRAM PHILOSOPHY AND ARCHITECTURAL PURPOSE
+---
 
+## Why Red Enclosure?
 
+Most hardware and developer utilities are split across dozens of disconnected scripts, browser tabs, or cloud services. **Red Enclosure** brings practical engineering, inspection, and media tools into one modular Python desktop application (`main.py` / `gui.py`):
 
-Critique of AI-Generated Schematics: The development of Red Enclosure originated from the realization that modern generative AI models frequently create circuit schematics that appear visually correct to non-experts but fail to work when physically constructed. Modern frontier AI models only get electrical circuit logic right approximately 50 to 60 percent of the time, resulting in online platforms filled with non-functional visual demonstrations.
+* **Enclosure, Canvas & Pipe Workbench:** Interactive 2D/3D canvas rendering (`canvas_graphics_rendering.py`, `canvas_graphics_geometry.py`, `canvas_mouse_events.py`, `canvas_tools_controller.py`), project serialization (`serialization_core.py`, `serialization_projects.py`), and pipe simulation (`pipe_simulation.py`, `pipe_sim_engine.py`).
+* **PCB & 2D Room Stitching:** Stitch multi-frame PCB captures and 2D room layouts (`pcb_stitch.py`, `pcb_mapper.py`, `room_stitcher_core.py`, `room_stitcher_2d.py`).
+* **Android ADB & `scrcpy` Diagnostics:** Mirror devices and run structured phone/touch/ADB diagnostics (`scrcpy_mirror_ui.py`, `scrcpy_mirror_stream.py`, `scrcpy_mirror_win32.py`, `phone_diagnostics.py`, `phone_diag_adb.py`, `phone_diag_sections.py`, `phone_diag_touch.py`, `phone_diag_parsers.py`, `phone_diag_analysis.py`).
+* **Offline Speech, OCR & Document Tools:** Local audio/video transcription (`audio_to_text.py`, `audio_workers.py`, `audio_intelligence_engine.py`, `audio_utils.py`), offline OCR scan editor & PDF generator (`paddle_ocr.py`, `ocr_scan_editor.py`, `ocr_pdf_maker.py`, `ocr_workers.py`, `ocr_imaging.py`, `ocr_gallery.py`, `ocr_image_extractor.py`, `ocr_support.py`), PDF text extraction/splitting/locking (`pdf_text_extractor.py`, `pdf_split_worker.py`, `pdf_locker.py`, `pdf_duplicate_cleaner.py`), and visual duplicate cleaning (`visual_duplicate_cleaner.py`, `visual_duplicate_ui.py`, `visual_dup_engine.py`).
+* **Video Editing, Vision & Utilities:** Automated video editing & rendering (`complete_auto_editor.py`, `auto_video_editor.py`, `video_render_engine.py`, `scene_boundary_engine.py`, `rhythm_continuity_engine.py`), screen recording (`screen_recorder.py`), live camera/vision modules (`live_emotion_detector.py`, `realistic_eye.py`, `haarcascade_frontalface_default.xml`, `haarcascade_eye.xml`), APK inspection (`apk_virus_checker.py`), and `aria2` downloads (`aria2_downloader.py`).
 
+---
 
-Deterministic Verification: Red Enclosure resolves this issue by providing a manual drag-and-drop canvas where engineers, makers, and technicians can place real physical component models and draw precise wiring connections to verify whether a layout will actually function.
+## Quick Start
 
+### 1. Clone the Repository
 
-Offline Privacy and Security: The program operates completely offline without connecting to internet servers. All project files, captured photos, extracted text, and media recordings remain strictly within the local host computer.
-Low Hardware Overhead: Every utility in the suite was optimized line-by-line so that the software runs smoothly on standard, lower-power PCs without requiring expensive hardware or dedicated GPUs.
+```cmd
+git clone https://github.com/Muzamil4266/Red-Enclosure-Design-and-Mechanical.git
+cd Red-Enclosure-Design-and-Mechanical
 
+```
 
+### 2. Install Python Dependencies
 
-AI-Assisted Systems Engineering: The software architecture was built using AI coding assistants, where Claude served as the primary implementation driver for feature coding and Gemini provided secondary technical support.
+Ensure Python 3 is installed, then install required packages (or run `dependency_installer.py` / `check_library.py` to inspect your environment):
 
+```cmd
+pip install customtkinter pillow numpy pymupdf opencv-python faster-whisper paddleocr aria2p
 
+```
 
- 2. INTERACTIVE CANVAS AND SCHEMATIC WORKSPACE
-Electrical Component Library: The workspace contains an extensive library of real-world electrical components, including resistors, diodes, transformers, and switches.
-Pin and Terminal Alignment: All library graphics are cropped and edited so that physical connecting pins, leads, and terminals are visually distinct for precise wiring alignment.
-Realistic Wire Tool: A dedicated wire tool places adjustable, realistic wire objects onto the canvas that can be stretched, angled, and routed between component pins to assemble functioning circuit boards.
+*(Install only the optional packages needed for the modules you use, and verify available libraries with `python check_library.py`.)*
 
+### 3. Run the Application
 
+```cmd
+python main.py
 
-Mechanical and Fluid Pipe Modeling: The canvas extends beyond electronics to support mechanical plumbing layouts. It includes pipe sections, elbow joints, sockets, and adapters that connect together to design fluid conduits.
-Drawing and Layout Tools: The top toolbar provides a freehand Pen tool, Line tool, Box tool, and geometric shapes such as Circles, Stars, and Springs.
+```
 
+---
 
-Structured Data Tables: Users can insert formatted data tables directly onto the canvas to track bills of materials, component specs, or pinout mappings.
+## Optional Local Models, Databases & External Binaries
 
+To keep the Git repository fast and lightweight, heavy runtime assets and local data directories are excluded via `.gitignore`:
 
+* **Local speech/vision models:** Place Whisper/ONNX models under `models/` or `emotion_model.onnx` if using offline transcription or emotion detection.
+* **Component database & store:** `components.db`, `components.db.part*`, `components_store/`, and `saved_projects/` stay local on your machine.
+* **Android / `scrcpy` tools:** Place ADB / `scrcpy` binaries in `platform-tools/` or `scrcpy_tools/` (and configure paths in `scrcpy_tools/paths.json` or `settings.json`).
+* **Output & cache folders:** `converted/`, `downloaded_audios/`, `recordings/`, `transcribed_texts/`, `editor.log`, and `__pycache__/` are generated automatically at runtime.
 
-Workspace Controls: The interface incorporates an Eraser, stroke size adjustments, smooth Zoom controls, color palettes, Undo/Redo functions, and controls to insert and manipulate external images.
-Exporting: Canvas projects can be cleared, saved into dedicated project folders, or exported directly into PDF documents across landscape, portrait, or full-screen screen layouts.
+---
 
+## Project Structure (Core Modules)
 
+| Area | Key Files |
+| --- | --- |
+| **Entry & Main UI** | `main.py`, `gui.py`, `config.py`, `settings.py`, `settings_logic.py`, `settings_schema.py`, `sidebar_ui.py`, `sidebar_actions.py`, `more_tools_menu.py` |
+| **Canvas, CAD & Pipes** | `canvas_ui_setup.py`, `canvas_ui_setup_controls.py`, `canvas_graphics_rendering.py`, `canvas_graphics_geometry.py`, `canvas_mouse_events.py`, `canvas_mouse_utils.py`, `canvas_tools_controller.py`, `canvas_tools_zoom_text.py`, `pipe_simulation.py`, `pipe_sim_engine.py`, `table_tool.py`, `insert_picture.py`, `history.py`, `analyze_project.py` |
+| **Stitching** | `pcb_stitch.py`, `pcb_mapper.py`, `room_stitcher_core.py`, `room_stitcher_2d.py` |
+| **ADB & `scrcpy**` | `scrcpy_mirror_ui.py`, `scrcpy_mirror_stream.py`, `scrcpy_mirror_win32.py`, `scrcpy_tools.py`, `phone_diagnostics.py`, `phone_diag_adb.py`, `phone_diag_sections.py`, `phone_diag_touch.py`, `phone_diag_parsers.py`, `phone_diag_analysis.py` |
+| **Audio, OCR & PDF** | `audio_to_text.py`, `audio_workers.py`, `audio_intelligence_engine.py`, `audio_utils.py`, `paddle_ocr.py`, `ocr_scan_editor.py`, `ocr_pdf_maker.py`, `ocr_workers.py`, `ocr_imaging.py`, `ocr_gallery.py`, `ocr_image_extractor.py`, `ocr_support.py`, `pdf_text_extractor.py`, `pdf_split_worker.py`, `pdf_locker.py`, `pdf_duplicate_cleaner.py` |
+| **Video, Vision & Cleaners** | `complete_auto_editor.py`, `auto_video_editor.py`, `video_render_engine.py`, `scene_boundary_engine.py`, `rhythm_continuity_engine.py`, `screen_recorder.py`, `live_emotion_detector.py`, `realistic_eye.py`, `visual_duplicate_cleaner.py`, `visual_duplicate_ui.py`, `visual_dup_engine.py`, `apk_virus_checker.py`, `aria2_downloader.py` |
 
- 3. COMPUTER VISION AND SPATIAL IMAGE STITCHING
-2D Room Layout Stitcher: This module processes multiple overlapping photographs of an indoor room taken with a smartphone camera and automatically stitches them into a unified two-dimensional spatial layout inside the workspace.
+---
 
+## Contributing & Issues
 
+Contributions, bug reports, module improvements, and test cases are welcome:
 
-High-Definition PCB Mapper: Standard smartphone cameras cannot capture an entire Printed Circuit Board in high resolution without lens distortion or blur. The PCB Mapper ingests close-up, overlapping photos of different board sections and stitches them into a single high-definition panoramic image of the entire PCB.
-Image Enhancement: A dedicated post-processing filter sharpens traces, component labels, and solder joints on stitched PCB maps to facilitate visual circuit inspection.
+1. Fork the repository and create a branch for your feature or fix.
+2. Test your changes directly against the running application before opening a pull request.
+3. Open an **Issue** on GitHub if you spot a bug, edge case, or improvement idea.
 
+---
 
+## License
+This project is licensed under the MIT License — see the LICENSE file for details.
+This project is licensed under the **MIT License** — see the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
 
- 4. MOBILE DIAGNOSTICS AND COMMAND-LINE AUTOMATION
-Low-Latency Screen Mirroring: The application replaces manual terminal commands with an automated Python GUI wrapper for Scrcpy. Users can mirror Android smartphone screens live over USB or Wi-Fi with high speed and zero display lag.
-ADB Hardware Inspector and Age Verification: By communicating directly through Android Debug Bridge, the program extracts hardware registers, system metadata, and build configurations from connected Android devices. It calculates the estimated physical manufacturing age of the phone to assist in inspecting used hardware.
-Accelerated Command-Line Downloader: To bypass browser download speed limits, the software embeds a Python GUI wrapper around the multi-threaded aria2 command-line downloader, enabling multi-connection file downloads at maximum network bandwidth.
-
-
-
- 5. OFFLINE SPEECH RECOGNITION AND DOCUMENT OCR
-Offline Multilingual Speech-to-Text: Red Enclosure includes a local speech recognition module for English and Hindi audio and video files. It converts spoken audio directly into text transcripts without an internet connection, scaling in speed based on system hardware.
-
-
-
-Offline AI Paddle OCR Engine: The document engine extracts text from scanned pages and photographs. Images undergo automatic sharpening, contrast enhancement, and rotation correction prior to text extraction.
-High Accuracy: The OCR pipeline achieves extraction accuracy rates between 90 and 99 percent across physical prints and multi-page PDF documents.
-
-
-
-PDF OCR Processing: Multi-page PDF files are split into high-resolution images, enhanced through contrast filters, processed through the OCR engine, and aggregated into complete text transcripts.
-
-
-
- 6. MEDIA AUTOMATION, SECURITY, AND SYSTEM TOOLS
-Silence-Cutting Video Editor: An automated video editor analyzes audio waveforms to detect and remove silent pauses, stitching active vocal segments into a fast-paced finished video.
-Integrated Screen Recorder: A desktop recording utility allows users to capture live video of their screen activities directly within the application.
-Physics Simulation: A pipe simulation module models elastic water flow mechanics for interactive testing of fluid conduit designs.
-Real Eye Animation and Emotion AI: The suite includes an interactive animated human eye module with realistic blinking controls, alongside a webcam-based AI facial emotion detector that identifies expressions in real time.
-AES-256 PDF Password Locker: A security tool encrypts PDF documents with AES-256 bit password protection.
-
-
-
-Android APK Virus Checker: A mobile security module scans APK installation files for malware signatures, suspicious code, and dangerous permission requests.
-
-
-Cryptographic Hash Duplicate Finder: Storage utilities scan local directories for duplicate images and PDFs using cryptographic content hashing rather than filenames.
-
-
-Automated Dependency Installer: An internal system monitor audits the runtime environment, automatically downloading and installing missing Python dependencies to ensure smooth software execution.
-
-
-EXTRA EXTRA 
-
-
-
-
-Engineered as an open, highly capable technical environment, the workspace liberates users from the boundaries of predefined components and static layouts. Its comprehensive array of integrated utilities enables limitless custom design, procedural assembly, and deep workflow integration tailored to any project requirement.
-
-
-Note=Note components db are splitted into 3 files because GitHub doesn't allow size of file more then 30mb, you easily combine all 3 files to one when you run your program take ai help if needed specifically gemini or claude only
-Each and every module is kept within 30kb size to to maintain proper expansion of program so there are too many modules this is deliberately doned by splitting large modules into small
